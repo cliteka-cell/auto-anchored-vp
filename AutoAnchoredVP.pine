@@ -1,0 +1,107 @@
+//@version=6
+indicator("Auto Anchored VP - True TPO Logic", overlay=true, max_lines_count=100, max_labels_count=100)
+
+rowsCount = input.int(200, "Number of Rows", minval=10, maxval=1000)
+vaPercent = input.float(70.0, "Value Area Volume %", minval=0.0, maxval=100.0)
+
+pocColor = input.color(color.new(#e2e676, 0), "Point of Control (POC) Color")
+lineColor = input.color(color.new(#7e57c2, 0), "VAH / VAL Line Color")
+
+isNewWeek = ta.change(time("W")) != 0
+
+var int currentWeekStartBar = na
+var int previousWeekStartBar = na
+
+if isNewWeek
+    previousWeekStartBar := currentWeekStartBar
+    currentWeekStartBar := bar_index
+
+if barstate.islast and not na(previousWeekStartBar)
+    lookback = bar_index - previousWeekStartBar
+
+    if lookback > 0 and lookback < 10000
+
+        highestPrice = high
+        lowestPrice = low
+        for i = 0 to lookback
+            highestPrice := math.max(highestPrice, high[i])
+            lowestPrice := math.min(lowestPrice, low[i])
+
+        priceRange = highestPrice - lowestPrice
+        binSize = priceRange / rowsCount
+
+        array<float> volBins = array.new<float>(rowsCount, 0.0)
+        totalVolume = 0.0
+
+        // Distribute volume evenly across the High-Low range of each bar
+        for i = 0 to lookback
+            barLowBin = math.floor((low[i] - lowestPrice) / binSize)
+            barHighBin = math.floor((high[i] - lowestPrice) / binSize)
+
+            barLowBin := math.max(0, math.min(rowsCount - 1, barLowBin))
+            barHighBin := math.max(0, math.min(rowsCount - 1, barHighBin))
+
+            binsSpanned = barHighBin - barLowBin + 1
+            volPerBin = volume[i] / binsSpanned
+
+            for b = barLowBin to barHighBin
+                volBins.set(b, volBins.get(b) + volPerBin)
+                totalVolume += volPerBin
+
+        // Find POC
+        maxVol = 0.0
+        pocIndex = 0
+        for i = 0 to rowsCount - 1
+            if volBins.get(i) > maxVol
+                maxVol := volBins.get(i)
+                pocIndex := i
+
+        // STANDARD DUAL-BIN VALUE AREA ALGORITHM (2-by-2 comparison)
+        vaVolumeTarget = totalVolume * (vaPercent / 100.0)
+        currentVaVolume = volBins.get(pocIndex)
+
+        upperIndex = pocIndex
+        lowerIndex = pocIndex
+
+        while currentVaVolume < vaVolumeTarget and (upperIndex < rowsCount - 1 or lowerIndex > 0)
+            volUp = 0.0
+            if upperIndex + 1 < rowsCount
+                volUp += volBins.get(upperIndex + 1)
+            if upperIndex + 2 < rowsCount
+                volUp += volBins.get(upperIndex + 2)
+
+            volDown = 0.0
+            if lowerIndex - 1 >= 0
+                volDown += volBins.get(lowerIndex - 1)
+            if lowerIndex - 2 >= 0
+                volDown += volBins.get(lowerIndex - 2)
+
+            if volUp == 0.0 and volDown == 0.0
+                break
+
+            if volUp >= volDown
+                if upperIndex + 1 < rowsCount
+                    upperIndex += 1
+                    currentVaVolume += volBins.get(upperIndex)
+                if currentVaVolume < vaVolumeTarget and upperIndex + 1 < rowsCount
+                    upperIndex += 1
+                    currentVaVolume += volBins.get(upperIndex)
+            else
+                if lowerIndex - 1 >= 0
+                    lowerIndex -= 1
+                    currentVaVolume += volBins.get(lowerIndex)
+                if currentVaVolume < vaVolumeTarget and lowerIndex - 1 >= 0
+                    lowerIndex -= 1
+                    currentVaVolume += volBins.get(lowerIndex)
+
+        vahPrice = lowestPrice + (upperIndex * binSize) + (binSize / 2)
+        valPrice = lowestPrice + (lowerIndex * binSize) + (binSize / 2)
+        pocPrice = lowestPrice + (pocIndex * binSize) + (binSize / 2)
+
+        line.new(x1=previousWeekStartBar, y1=pocPrice, x2=bar_index + 5, y2=pocPrice, color=pocColor, width=1, style=line.style_solid)
+        line.new(x1=previousWeekStartBar, y1=vahPrice, x2=bar_index + 5, y2=vahPrice, color=lineColor, width=1, style=line.style_solid)
+        line.new(x1=previousWeekStartBar, y1=valPrice, x2=bar_index + 5, y2=valPrice, color=lineColor, width=1, style=line.style_solid)
+
+        label.new(x=bar_index + 5, y=vahPrice, text="VAH", color=lineColor, textcolor=color.white, style=label.style_label_left, size=size.small)
+        label.new(x=bar_index + 5, y=pocPrice, text="POC", color=pocColor, textcolor=color.black, style=label.style_label_left, size=size.small)
+        label.new(x=bar_index + 5, y=valPrice, text="VAL", color=lineColor, textcolor=color.white, style=label.style_label_left, size=size.small)
